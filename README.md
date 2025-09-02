@@ -1,10 +1,10 @@
-# bug_rs
+# bug
 
-[![Crates.io](https://img.shields.io/crates/v/bug_rs.svg)](https://crates.io/crates/bug_rs)
-[![Documentation](https://docs.rs/bug_rs/badge.svg)](https://docs.rs/bug_rs)
+[![Crates.io](https://img.shields.io/crates/v/bug.svg)](https://crates.io/crates/bug)
+[![Documentation](https://docs.rs/bug/badge.svg)](https://docs.rs/bug)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-A Rust library for streamlined bug reporting that generates GitHub issue URLs with pre-filled templates. When bugs occur, `bug_rs` prints tracing-style error messages to stderr and provides clean GitHub URLs for easy bug reporting.
+A Rust library for streamlined bug reporting that generates GitHub issue URLs with pre-filled templates. When bugs occur, `bug` prints tracing-style error messages to stderr and provides clean GitHub URLs for easy bug reporting.
 
 ## ✨ Features
 
@@ -21,13 +21,13 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-bug_rs = "0.1.0"
+bug = "0.1.0"
 ```
 
 ## 🚀 Quick Start
 
 ```rust
-use bug_rs::{bug, init, IssueTemplate};
+use bug::{bug, init, IssueTemplate};
 
 fn main() -> Result<(), &'static str> {
     // Initialize with your GitHub repository
@@ -92,7 +92,7 @@ The application crashed with error: {error_type}
 
 **Load in Rust:**
 ```rust
-use bug_rs::{init, template_file};
+use bug::{init, template_file};
 
 fn main() -> Result<(), &'static str> {
     init("myorg", "myproject")
@@ -107,7 +107,7 @@ fn main() -> Result<(), &'static str> {
 ### Multiple Template Types
 
 ```rust
-use bug_rs::{init, IssueTemplate, template_file};
+use bug::{init, IssueTemplate, template_file};
 
 fn main() -> Result<(), &'static str> {
     init("myorg", "myproject")
@@ -170,7 +170,7 @@ Generated GitHub URLs can be quite long (800+ characters) due to URL-encoded tem
 Configure how links are displayed:
 
 ```rust
-use bug_rs::{init, HyperlinkMode};
+use bug::{init, HyperlinkMode};
 
 // Auto-detect terminal hyperlink support (default)
 init("user", "repo")
