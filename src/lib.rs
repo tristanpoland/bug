@@ -1,0 +1,464 @@
+//! # bug_rs
+//!
+//! A simple Rust library for printing a tracing-style error in the event of a bug and allowing users to easily file a bug report via GitHub issues using bug templates.
+//!
+//! ## Features
+//!
+//! - Define reusable issue templates with named parameters
+//! - Load templates from markdown files using `include_str!` macro
+//! - Print formatted bug reports to stderr (similar to tracing output)
+//! - Generate clean GitHub issue URLs with pre-filled templates
+//! - Support for multiple issue templates per project
+//! - URL encoding for special characters
+//! - Optional labels for GitHub issues
+//! - Parameter validation ensures all placeholders are filled
+//!
+//! ## Quick Start
+//!
+//! ```rust
+//! use bug_rs::{bug, init, IssueTemplate};
+//!
+//! # fn main() -> Result<(), &'static str> {
+//! // Initialize with your GitHub repository
+//! init("username", "repository")
+//!     .add_template("crash", IssueTemplate::new(
+//!         "Application Crash: {error_type}",
+//!         "## Description\nThe application crashed with error: {error_type}\n\n## Context\n- Function: {function}\n- Line: {line}"
+//!     ).with_labels(vec!["bug".to_string(), "crash".to_string()]))
+//!     .build()?;
+//!
+//! // Later in your code, when a bug occurs:
+//! let url = bug!("crash", {
+//!     error_type = "NullPointerException",
+//!     function = "calculate_sum",
+//!     line = "42"
+//! });
+//! 
+//! println!("Bug report URL: {}", url);
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## Advanced Usage
+//!
+//! ### Using Template Files
+//!
+//! Create a markdown template file with placeholders:
+//!
+//! **templates/crash_report.md:**
+//! ```markdown
+//! Application Crash: {error_type}
+//!
+//! ## Description
+//! The application crashed with error: {error_type}
+//!
+//! ## Context
+//! - Function: {function}
+//! - Line: {line}
+//! - OS: {os}
+//! ```
+//!
+//! Then load it in your Rust code:
+//!
+//! ```rust
+//! use bug_rs::{init, template_file};
+//!
+//! # fn main() -> Result<(), &'static str> {
+//! init("myorg", "myproject")
+//!     .add_template_file("crash", template_file!("templates/crash_report.md", labels: ["bug", "crash"]))
+//!     .build()?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ### Multiple Templates
+//!
+//! ```rust
+//! use bug_rs::{init, IssueTemplate, template_file};
+//!
+//! # fn main() -> Result<(), &'static str> {
+//! init("myorg", "myproject")
+//!     .add_template("simple", IssueTemplate::new(
+//!         "Simple Issue: {title}",
+//!         "Description: {description}"
+//!     ))
+//!     .add_template_file("detailed", template_file!("templates/detailed_report.md"))
+//!     .build()?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ### Using the bug! Macro
+//!
+//! The `bug!` macro provides a clean API similar to tracing macros:
+//!
+//! ```rust
+//! # use bug_rs::{bug, init, IssueTemplate};
+//! # init("test", "test").add_template("error", IssueTemplate::new("Error", "Body")).build().unwrap();
+//!
+//! // Simple usage without parameters
+//! bug!("error");
+//!
+//! // With named parameters
+//! bug!("performance", {
+//!     operation = "database_query",
+//!     expected = 100,
+//!     actual = 1500,
+//!     os = std::env::consts::OS,
+//!     version = env!("CARGO_PKG_VERSION")
+//! });
+//! ```
+//!
+//! ## Output Format
+//!
+//! When `bug!()` is called, it prints to stderr in a format similar to tracing:
+//!
+//! ```text
+//! 🐛 BUG ENCOUNTERED in src/main.rs:45
+//!    Template: crash
+//!    Parameters:
+//!      error_type: NullPointerException
+//!      function: calculate_sum
+//!      line: 42
+//!    File a bug report: https://github.com/username/repository/issues/new?title=Application%20Crash%3A%20NullPointerException&body=...
+//! ```
+
+use once_cell::sync::OnceCell;
+use std::collections::HashMap;
+
+static CONFIG: OnceCell<BugReportConfig> = OnceCell::new();
+
+#[derive(Debug, Clone)]
+pub struct BugReportConfig {
+    pub github_owner: String,
+    pub github_repo: String,
+    pub templates: HashMap<String, IssueTemplate>,
+    pub template_files: HashMap<String, TemplateFile>,
+    pub use_hyperlinks: HyperlinkMode,
+}
+
+#[derive(Debug, Clone)]
+pub enum HyperlinkMode {
+    /// Automatically detect terminal hyperlink support
+    Auto,
+    /// Always use hyperlinks
+    Always,
+    /// Never use hyperlinks (show full URLs)
+    Never,
+}
+
+#[derive(Debug, Clone)]
+pub struct IssueTemplate {
+    pub title: String,
+    pub body: String,
+    pub labels: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TemplateFile {
+    pub content: &'static str,
+    pub labels: Vec<String>,
+}
+
+impl TemplateFile {
+    pub fn new(content: &'static str) -> Self {
+        Self {
+            content,
+            labels: Vec::new(),
+        }
+    }
+
+    pub fn with_labels(mut self, labels: Vec<String>) -> Self {
+        self.labels = labels;
+        self
+    }
+
+    pub fn parse(&self) -> Result<IssueTemplate, String> {
+        let lines: Vec<&str> = self.content.lines().collect();
+        
+        if lines.is_empty() {
+            return Err("Template file is empty".to_string());
+        }
+
+        let title = lines[0].trim();
+        if title.is_empty() {
+            return Err("Template must have a title on the first line".to_string());
+        }
+
+        let body = if lines.len() > 1 {
+            lines[1..].join("\n").trim().to_string()
+        } else {
+            String::new()
+        };
+
+        Ok(IssueTemplate {
+            title: title.to_string(),
+            body,
+            labels: self.labels.clone(),
+        })
+    }
+
+    pub fn validate_params(&self, params: &HashMap<String, String>) -> Result<(), String> {
+        let placeholders = extract_placeholders(self.content);
+        
+        for placeholder in &placeholders {
+            if !params.contains_key(placeholder) {
+                return Err(format!("Missing required parameter: {}", placeholder));
+            }
+        }
+
+        for param_key in params.keys() {
+            if !placeholders.contains(param_key) {
+                return Err(format!("Unused parameter: {}", param_key));
+            }
+        }
+
+        Ok(())
+    }
+}
+
+impl IssueTemplate {
+    pub fn new(title: impl Into<String>, body: impl Into<String>) -> Self {
+        Self {
+            title: title.into(),
+            body: body.into(),
+            labels: Vec::new(),
+        }
+    }
+
+    pub fn from_template_file(template_file: &TemplateFile, params: &HashMap<String, String>) -> Result<Self, String> {
+        template_file.validate_params(params)?;
+        let parsed_template = template_file.parse()?;
+        Ok(parsed_template.fill_params(params))
+    }
+
+    pub fn with_labels(mut self, labels: Vec<String>) -> Self {
+        self.labels = labels;
+        self
+    }
+
+    pub fn fill_params(&self, params: &HashMap<String, String>) -> IssueTemplate {
+        let mut filled_title = self.title.clone();
+        let mut filled_body = self.body.clone();
+
+        for (key, value) in params {
+            let placeholder = format!("{{{}}}", key);
+            filled_title = filled_title.replace(&placeholder, value);
+            filled_body = filled_body.replace(&placeholder, value);
+        }
+
+        IssueTemplate {
+            title: filled_title,
+            body: filled_body,
+            labels: self.labels.clone(),
+        }
+    }
+}
+
+fn extract_placeholders(content: &str) -> Vec<String> {
+    let mut placeholders = Vec::new();
+    let mut chars = content.chars().peekable();
+    
+    while let Some(ch) = chars.next() {
+        if ch == '{' {
+            let mut placeholder = String::new();
+            let mut found_end = false;
+            
+            while let Some(inner_ch) = chars.next() {
+                if inner_ch == '}' {
+                    found_end = true;
+                    break;
+                } else if inner_ch.is_alphanumeric() || inner_ch == '_' {
+                    placeholder.push(inner_ch);
+                } else {
+                    placeholder.clear();
+                    break;
+                }
+            }
+            
+            if found_end && !placeholder.is_empty() && !placeholders.contains(&placeholder) {
+                placeholders.push(placeholder);
+            }
+        }
+    }
+    
+    placeholders
+}
+
+#[macro_export]
+macro_rules! template_file {
+    ($path:expr) => {
+        $crate::TemplateFile::new(include_str!($path))
+    };
+    ($path:expr, labels: [$($label:expr),* $(,)?]) => {
+        $crate::TemplateFile::new(include_str!($path))
+            .with_labels(vec![$($label.to_string()),*])
+    };
+}
+
+pub fn init(github_owner: impl Into<String>, github_repo: impl Into<String>) -> BugReportConfigBuilder {
+    BugReportConfigBuilder::new(github_owner.into(), github_repo.into())
+}
+
+pub struct BugReportConfigBuilder {
+    config: BugReportConfig,
+}
+
+impl BugReportConfigBuilder {
+    fn new(github_owner: String, github_repo: String) -> Self {
+        Self {
+            config: BugReportConfig {
+                github_owner,
+                github_repo,
+                templates: HashMap::new(),
+                template_files: HashMap::new(),
+                use_hyperlinks: HyperlinkMode::Auto,
+            },
+        }
+    }
+
+    pub fn add_template(mut self, name: impl Into<String>, template: IssueTemplate) -> Self {
+        self.config.templates.insert(name.into(), template);
+        self
+    }
+
+    pub fn add_template_file(mut self, name: impl Into<String>, template_file: TemplateFile) -> Self {
+        self.config.template_files.insert(name.into(), template_file);
+        self
+    }
+
+    pub fn hyperlinks(mut self, mode: HyperlinkMode) -> Self {
+        self.config.use_hyperlinks = mode;
+        self
+    }
+
+    pub fn build(self) -> Result<(), &'static str> {
+        CONFIG.set(self.config).map_err(|_| "Bug reporting already initialized")
+    }
+}
+
+pub fn generate_github_url(template_name: &str, params: &HashMap<String, String>) -> Result<String, String> {
+    let config = CONFIG.get().ok_or("Bug reporting not initialized. Call bug_rs::init() first.")?;
+    
+    let filled_template = if let Some(template) = config.templates.get(template_name) {
+        template.fill_params(params)
+    } else if let Some(template_file) = config.template_files.get(template_name) {
+        IssueTemplate::from_template_file(template_file, params)?
+    } else {
+        return Err(format!("Template '{}' not found", template_name));
+    };
+    
+    let mut url = format!(
+        "https://github.com/{}/{}/issues/new",
+        config.github_owner, config.github_repo
+    );
+
+    let mut query_params = Vec::new();
+    
+    if !filled_template.title.is_empty() {
+        query_params.push(format!("title={}", urlencoding::encode(&filled_template.title)));
+    }
+    
+    if !filled_template.body.is_empty() {
+        query_params.push(format!("body={}", urlencoding::encode(&filled_template.body)));
+    }
+    
+    if !filled_template.labels.is_empty() {
+        let labels_str = filled_template.labels.join(",");
+        query_params.push(format!("labels={}", urlencoding::encode(&labels_str)));
+    }
+
+    if !query_params.is_empty() {
+        url.push('?');
+        url.push_str(&query_params.join("&"));
+    }
+
+    Ok(url)
+}
+
+/// Creates a terminal hyperlink using ANSI escape sequences
+/// Format: \x1b]8;;URL\x1b\\TEXT\x1b]8;;\x1b\\
+pub fn create_terminal_hyperlink(url: &str, text: &str) -> String {
+    format!("\x1b]8;;{}\x1b\\{}\x1b]8;;\x1b\\", url, text)
+}
+
+/// Gets the hyperlink mode from configuration
+pub fn get_hyperlink_mode() -> HyperlinkMode {
+    CONFIG.get()
+        .map(|config| config.use_hyperlinks.clone())
+        .unwrap_or(HyperlinkMode::Never)
+}
+
+/// Detects if the terminal supports hyperlinks by checking environment variables
+pub fn supports_hyperlinks() -> bool {
+    // Check for common terminal emulators that support hyperlinks
+    if let Ok(term) = std::env::var("TERM") {
+        if term.contains("xterm") || term.contains("screen") || term.contains("tmux") {
+            return true;
+        }
+    }
+    
+    // Check for specific terminal programs
+    if let Ok(term_program) = std::env::var("TERM_PROGRAM") {
+        match term_program.as_str() {
+            "iTerm.app" | "WezTerm" | "Alacritty" | "Windows Terminal" => return true,
+            _ => {}
+        }
+    }
+    
+    // Check for VS Code integrated terminal
+    if std::env::var("VSCODE_INJECTION").is_ok() {
+        return true;
+    }
+    
+    // Default to false for unknown terminals
+    false
+}
+
+#[macro_export]
+macro_rules! bug {
+    ($template:expr) => {
+        $crate::bug!($template, {})
+    };
+    ($template:expr, { $($key:ident = $value:expr),* $(,)? }) => {{
+        use std::collections::HashMap;
+        
+        let mut params = HashMap::new();
+        $(
+            params.insert(stringify!($key).to_string(), $value.to_string());
+        )*
+
+        match $crate::generate_github_url($template, &params) {
+            Ok(url) => {
+                eprintln!("🐛 BUG ENCOUNTERED in {}:{}", file!(), line!());
+                eprintln!("   Template: {}", $template);
+                if !params.is_empty() {
+                    eprintln!("   Parameters:");
+                    for (key, value) in &params {
+                        eprintln!("     {}: {}", key, value);
+                    }
+                }
+                let should_use_hyperlinks = match $crate::get_hyperlink_mode() {
+                    $crate::HyperlinkMode::Auto => $crate::supports_hyperlinks(),
+                    $crate::HyperlinkMode::Always => true,
+                    $crate::HyperlinkMode::Never => false,
+                };
+                
+                if should_use_hyperlinks {
+                    eprintln!("   {}", $crate::create_terminal_hyperlink(&url, "File a bug report"));
+                } else {
+                    eprintln!("   File a bug report: {}", url);
+                }
+                eprintln!();
+                url
+            }
+            Err(e) => {
+                eprintln!("🐛 BUG ENCOUNTERED in {}:{}", file!(), line!());
+                eprintln!("   Error generating bug report: {}", e);
+                eprintln!();
+                String::new()
+            }
+        }
+    }};
+}
+
