@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 use bug_rs::{bug, init, IssueTemplate};
 
 fn main() -> Result<(), &'static str> {
