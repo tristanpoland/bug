@@ -2,6 +2,8 @@
 name = "bug_rs"
 version = "0.1.0"
 edition = "2024"
+description = "A simple Rust library for printing an error in the event of a bug and allowing users to easily file a bug report via GitHub issues using bug templates."
+license = "MIT"
 
 [dependencies]
 urlencoding = "2.1"
