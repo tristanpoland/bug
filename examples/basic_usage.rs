@@ -1,6 +1,6 @@
 #![allow(unused)]
 
-use bug_rs::{bug, init, IssueTemplate};
+use bug::{bug, init, IssueTemplate};
 
 fn main() -> Result<(), &'static str> {
     // Initialize the bug reporter with your GitHub repo

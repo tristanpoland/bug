@@ -1,6 +1,6 @@
 #![allow(unused)]
 
-use bug_rs::{bug, init, template_file};
+use bug::{bug, init, template_file};
 
 fn main() -> Result<(), &'static str> {
     init("tristanpoland", "GLUE")

@@ -41,6 +41,32 @@
 //!
 //! ## Advanced Usage
 //!
+//! ### Multi-Crate Projects with Shared Bug Definitions
+//!
+//! For multi-crate projects, you can create a shared bug reporting handle that doesn't rely on global state:
+//!
+//! ```rust
+//! use bug_rs::{bug_with_handle, init_handle, IssueTemplate, BugReportHandle};
+//!
+//! # fn main() {
+//! // Create a handle that can be shared across crates
+//! let bug_handle = init_handle("myorg", "myproject")
+//!     .add_template("crash", IssueTemplate::new(
+//!         "Application Crash: {error_type}",
+//!         "## Description\nThe application crashed with error: {error_type}"
+//!     ))
+//!     .add_template("performance", IssueTemplate::new(
+//!         "Performance Issue: {operation} is too slow",
+//!         "Operation: {operation}\nExpected: {expected}ms\nActual: {actual}ms"
+//!     ));
+//!
+//! // Use the handle to report bugs
+//! let url = bug_with_handle!(bug_handle, "crash", {
+//!     error_type = "NullPointerException"
+//! });
+//! # }
+//! ```
+//!
 //! ### Using Template Files
 //!
 //! Create a markdown template file with placeholders:
@@ -300,6 +326,10 @@ pub fn init(github_owner: impl Into<String>, github_repo: impl Into<String>) -> 
     BugReportConfigBuilder::new(github_owner.into(), github_repo.into())
 }
 
+pub fn init_handle(github_owner: impl Into<String>, github_repo: impl Into<String>) -> BugReportHandle {
+    BugReportHandle::new(github_owner.into(), github_repo.into())
+}
+
 pub struct BugReportConfigBuilder {
     config: BugReportConfig,
 }
@@ -334,6 +364,115 @@ impl BugReportConfigBuilder {
 
     pub fn build(self) -> Result<(), &'static str> {
         CONFIG.set(self.config).map_err(|_| "Bug reporting already initialized")
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct BugReportHandle {
+    config: BugReportConfig,
+}
+
+impl BugReportHandle {
+    fn new(github_owner: String, github_repo: String) -> Self {
+        Self {
+            config: BugReportConfig {
+                github_owner,
+                github_repo,
+                templates: HashMap::new(),
+                template_files: HashMap::new(),
+                use_hyperlinks: HyperlinkMode::Auto,
+            },
+        }
+    }
+
+    pub fn add_template(mut self, name: impl Into<String>, template: IssueTemplate) -> Self {
+        self.config.templates.insert(name.into(), template);
+        self
+    }
+
+    pub fn add_template_file(mut self, name: impl Into<String>, template_file: TemplateFile) -> Self {
+        self.config.template_files.insert(name.into(), template_file);
+        self
+    }
+
+    pub fn hyperlinks(mut self, mode: HyperlinkMode) -> Self {
+        self.config.use_hyperlinks = mode;
+        self
+    }
+
+    pub fn generate_url(&self, template_name: &str, params: &HashMap<String, String>) -> Result<String, String> {
+        let filled_template = if let Some(template) = self.config.templates.get(template_name) {
+            template.fill_params(params)
+        } else if let Some(template_file) = self.config.template_files.get(template_name) {
+            IssueTemplate::from_template_file(template_file, params)?
+        } else {
+            return Err(format!("Template '{}' not found", template_name));
+        };
+        
+        let mut url = format!(
+            "https://github.com/{}/{}/issues/new",
+            self.config.github_owner, self.config.github_repo
+        );
+
+        let mut query_params = Vec::new();
+        
+        if !filled_template.title.is_empty() {
+            query_params.push(format!("title={}", urlencoding::encode(&filled_template.title)));
+        }
+        
+        if !filled_template.body.is_empty() {
+            query_params.push(format!("body={}", urlencoding::encode(&filled_template.body)));
+        }
+        
+        if !filled_template.labels.is_empty() {
+            let labels_str = filled_template.labels.join(",");
+            query_params.push(format!("labels={}", urlencoding::encode(&labels_str)));
+        }
+
+        if !query_params.is_empty() {
+            url.push('?');
+            url.push_str(&query_params.join("&"));
+        }
+
+        Ok(url)
+    }
+
+    pub fn report_bug(&self, template_name: &str, params: &HashMap<String, String>, file: &str, line: u32) -> String {
+        match self.generate_url(template_name, params) {
+            Ok(url) => {
+                eprintln!("🐛 BUG ENCOUNTERED in {}:{}", file, line);
+                eprintln!("   Template: {}", template_name);
+                if !params.is_empty() {
+                    eprintln!("   Parameters:");
+                    for (key, value) in params {
+                        eprintln!("     {}: {}", key, value);
+                    }
+                }
+                let should_use_hyperlinks = match self.config.use_hyperlinks {
+                    HyperlinkMode::Auto => supports_hyperlinks(),
+                    HyperlinkMode::Always => true,
+                    HyperlinkMode::Never => false,
+                };
+                
+                if should_use_hyperlinks {
+                    eprintln!("   {}", create_terminal_hyperlink(&url, "File a bug report"));
+                } else {
+                    eprintln!("   File a bug report: {}", url);
+                }
+                eprintln!();
+                url
+            }
+            Err(e) => {
+                eprintln!("🐛 BUG ENCOUNTERED in {}:{}", file, line);
+                eprintln!("   Error generating bug report: {}", e);
+                eprintln!();
+                String::new()
+            }
+        }
+    }
+
+    pub fn config(&self) -> &BugReportConfig {
+        &self.config
     }
 }
 
@@ -459,6 +598,23 @@ macro_rules! bug {
                 String::new()
             }
         }
+    }};
+}
+
+#[macro_export]
+macro_rules! bug_with_handle {
+    ($handle:expr, $template:expr) => {
+        $crate::bug_with_handle!($handle, $template, {})
+    };
+    ($handle:expr, $template:expr, { $($key:ident = $value:expr),* $(,)? }) => {{
+        use std::collections::HashMap;
+        
+        let mut params = HashMap::new();
+        $(
+            params.insert(stringify!($key).to_string(), $value.to_string());
+        )*
+
+        $handle.report_bug($template, &params, file!(), line!())
     }};
 }
 

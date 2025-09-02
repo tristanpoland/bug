@@ -1,4 +1,4 @@
-use bug_rs::{bug, init, IssueTemplate, HyperlinkMode};
+use bug::{bug, init, IssueTemplate, HyperlinkMode};
 
 fn main() -> Result<(), &'static str> {
     // Initialize with auto-detection (default)

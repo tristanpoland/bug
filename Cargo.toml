@@ -1,6 +1,6 @@
 [package]
 name = "bug"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
 description = "A simple Rust library for printing an error in the event of a bug and allowing users to easily file a bug report via GitHub issues using bug templates."
 license = "MIT"
