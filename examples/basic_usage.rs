@@ -16,7 +16,6 @@ fn main() -> Result<(), &'static str> {
         .build()?;
 
     // Simulate different types of bugs
-    println!("=== Testing crash template ===");
     let crash_url = bug!("crash", {
         error_type = "NullPointerException",
         function = "calculate_sum",
@@ -24,7 +23,6 @@ fn main() -> Result<(), &'static str> {
         os = std::env::consts::OS
     });
     
-    println!("=== Testing performance template ===");
     let perf_url = bug!("performance", {
         operation = "database_query",
         expected = 100,
@@ -33,7 +31,6 @@ fn main() -> Result<(), &'static str> {
         version = env!("CARGO_PKG_VERSION")
     });
 
-    println!("=== Testing simple usage ===");
     bug!("crash");
 
     Ok(())

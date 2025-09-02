@@ -8,7 +8,6 @@ fn main() -> Result<(), &'static str> {
         .add_template_file("performance", template_file!("../templates/performance_issue.md", labels: ["performance", "optimization"]))
         .build()?;
 
-    println!("=== Testing crash template with file ===");
     let crash_url = bug!("crash", {
         error_type = "NullPointerException",
         function = "calculate_sum",
@@ -22,7 +21,6 @@ fn main() -> Result<(), &'static str> {
         additional_info = "This happens only on Windows 11"
     });
 
-    println!("=== Testing performance template with file ===");
     let perf_url = bug!("performance", {
         operation = "database_query",
         expected = "100",
