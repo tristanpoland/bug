@@ -4,7 +4,7 @@
 [![Documentation](https://docs.rs/bug/badge.svg)](https://docs.rs/bug)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-A Rust library for streamlined bug reporting that generates GitHub issue URLs with pre-filled templates. When bugs occur, `bug` prints tracing-style error messages to stderr and provides clean GitHub URLs for easy bug reporting.
+A Rust library for streamlined bug reporting that generates GitHub issue URLs with pre-filled templates. Works in both `std` and `no_std` environments. When bugs occur, `bug` prints tracing-style error messages to stderr and provides clean GitHub URLs for easy bug reporting.
 
 ## ✨ Features
 
@@ -303,38 +303,62 @@ The hyperlink text "File a bug report" becomes clickable and opens the full GitH
 
 ### Core Functions
 
-- `init(owner, repo)` - Initialize bug reporting configuration
-- `bug!(template, {params})` - Report a bug with given template and parameters
+- `init(owner, repo)` - Initialize bug reporting configuration (std only)
+- `init_handle(owner, repo)` - Create a bug report handle (std and no_std)
+- `bug!(template, {params})` - Report a bug with given template and parameters (std only)
+- `bug_with_handle!(handle, template, {params})` - Report bug using handle (std and no_std)
 - `create_terminal_hyperlink(url, text)` - Create ANSI hyperlink escape sequence
-- `supports_hyperlinks()` - Detect terminal hyperlink support
+- `supports_hyperlinks()` - Detect terminal hyperlink support (std only, no_std returns false)
 
 ### Structs
 
 - `IssueTemplate` - Represents a GitHub issue template
-- `TemplateFile` - File-based template with validation
-- `BugReportConfigBuilder` - Fluent API for configuration
+- `TemplateFile` - File-based template with validation  
+- `BugReportConfigBuilder` - Fluent API for configuration (std only)
+- `BugReportHandle` - Handle-based bug reporting (std and no_std)
 - `HyperlinkMode` - Configure hyperlink display behavior
+
+### Types
+
+- `FxHashMap<K, V>` - HashMap type used by the API (re-exported from hashbrown)
+- `Output` - Trait for custom output in no_std environments
 
 ### Enums
 
-- `HyperlinkMode::Auto` - Auto-detect terminal support (default)
+- `HyperlinkMode::Auto` - Auto-detect terminal support (default, std only)
 - `HyperlinkMode::Always` - Always use hyperlinks
 - `HyperlinkMode::Never` - Always show full URLs
 
 ### Macros
 
 - `template_file!(path, labels: [...])` - Load template from file
-- `bug!(template, {key = value, ...})` - Report bug with parameters
+- `bug!(template, {key = value, ...})` - Report bug with parameters (std only)
+- `bug_with_handle!(handle, template, {key = value, ...})` - Report bug with handle (std and no_std)
+
+### Feature Flags
+
+- `std` (default) - Enable std support with global state and environment detection
+- When `std` is disabled: no_std mode with handle-based API only
 
 ## 🧪 Examples
 
 See the [`examples/`](examples/) directory for complete working examples:
+- [`basic_usage.rs`](examples/basic_usage.rs) - Basic global state usage
+- [`handle_usage.rs`](examples/handle_usage.rs) - Handle-based API (works in no_std)
 - [`template_file_usage.rs`](examples/template_file_usage.rs) - File-based templates
+- [`hyperlink_demo.rs`](examples/hyperlink_demo.rs) - Terminal hyperlink examples
 - Template files in [`templates/`](templates/) directory
 
 Run examples:
 ```bash
+cargo run --example basic_usage
+cargo run --example handle_usage
 cargo run --example template_file_usage
+```
+
+For no_std examples:
+```bash
+cargo run --example handle_usage --no-default-features
 ```
 
 ## 🤝 Contributing
