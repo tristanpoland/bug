@@ -1,6 +1,6 @@
 #![allow(unused)]
 
-use bug::{bug_with_handle, init_handle, IssueTemplate, BugReportHandle};
+use bug::{bug_with_handle, init_handle, IssueTemplate, BugReportHandle, FxHashMap};
 
 fn main() {
     // Create a bug handle that can be shared across crates
@@ -32,7 +32,7 @@ fn main() {
     });
 
     // You can also call methods directly on the handle
-    let mut params = std::collections::HashMap::new();
+    let mut params = FxHashMap::default();
     params.insert("error_type".to_string(), "MemoryLeak".to_string());
     params.insert("function".to_string(), "allocate_buffer".to_string());
     params.insert("line".to_string(), "123".to_string());

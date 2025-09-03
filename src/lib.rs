@@ -170,7 +170,7 @@ use hashbrown::HashMap;
 use rustc_hash::FxHasher;
 use core::hash::BuildHasherDefault;
 
-type FxHashMap<K, V> = HashMap<K, V, BuildHasherDefault<FxHasher>>;
+pub type FxHashMap<K, V> = HashMap<K, V, BuildHasherDefault<FxHasher>>;
 
 #[cfg(feature = "std")]
 use once_cell::sync::OnceCell;

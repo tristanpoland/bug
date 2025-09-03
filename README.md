@@ -14,6 +14,8 @@ A Rust library for streamlined bug reporting that generates GitHub issue URLs wi
 - ✅ **Parameter validation** - Ensures all template placeholders are properly filled at compile time
 - 🌐 **URL encoding** - Handles special characters in URLs automatically
 - 📁 **Multiple templates** - Support for different issue types per project
+- 🛠️ **no_std support** - Works in embedded and no_std environments with `--no-default-features`
+- 📦 **Handle-based API** - Alternative API that doesn't rely on global state
 
 ## 📦 Installation
 
@@ -21,7 +23,16 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-bug = "0.1.0"
+bug = "0.2.0"
+```
+
+### no_std Support
+
+For embedded or no_std environments:
+
+```toml
+[dependencies]
+bug = { version = "0.2.0", default-features = false }
 ```
 
 ## 🚀 Quick Start
@@ -59,6 +70,72 @@ This outputs:
      function: calculate_sum
      line: 42
    File a bug report: https://github.com/username/repository/issues/new?title=Application%20Crash%3A%20NullPointerException&body=...
+```
+
+## 🛠️ no_std and Handle-based API
+
+For `no_std` environments or when you prefer not to use global state, use the handle-based API:
+
+```rust
+use bug::{bug_with_handle, init_handle, IssueTemplate, FxHashMap};
+
+fn main() {
+    // Create a handle that doesn't use global state
+    let bug_handle = init_handle("myorg", "myproject")
+        .add_template("crash", IssueTemplate::new(
+            "Application Crash: {error_type}",
+            "## Description\nThe application crashed with error: {error_type}"
+        ))
+        .add_template("performance", IssueTemplate::new(
+            "Performance Issue: {operation} is too slow",
+            "Operation: {operation}\nExpected: {expected}ms\nActual: {actual}ms"
+        ));
+
+    // Use the handle to report bugs
+    let url = bug_with_handle!(bug_handle, "crash", {
+        error_type = "NullPointerException"
+    });
+
+    // Or call methods directly with FxHashMap
+    let mut params = FxHashMap::default();
+    params.insert("operation".to_string(), "database_query".to_string());
+    params.insert("expected".to_string(), "100".to_string());
+    params.insert("actual".to_string(), "1500".to_string());
+    
+    let direct_url = bug_handle.generate_url("performance", &params).unwrap();
+}
+```
+
+### no_std Considerations
+
+In `no_std` mode:
+- Use `FxHashMap` instead of `std::collections::HashMap`
+- Global `bug!()` macro returns empty string (use `bug_with_handle!()` instead)
+- Terminal hyperlink detection is disabled (specify `HyperlinkMode::Always` or `Never` explicitly)
+- Custom output via the `Output` trait for logging to different targets
+
+### Custom Output in no_std
+
+```rust
+#[cfg(not(feature = "std"))]
+use bug::{Output, BugReportHandle};
+
+struct MyOutput;
+
+impl Output for MyOutput {
+    fn write_str(&mut self, s: &str) {
+        // Send to your logging system, UART, etc.
+        my_log_function(s);
+    }
+    
+    fn write_fmt(&mut self, args: core::fmt::Arguments) {
+        // Format and send to your logging system
+        my_log_function(&format!("{}", args));
+    }
+}
+
+let mut output = MyOutput;
+let url = bug_handle.report_bug_with_output("crash", &params, file!(), line!(), &mut output);
 ```
 
 ## 📋 Template Files
