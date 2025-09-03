@@ -1,3 +1,5 @@
+#![cfg_attr(not(feature = "std"), no_std)]
+
 //! # bug_rs
 //!
 //! A simple Rust library for printing a tracing-style error in the event of a bug and allowing users to easily file a bug report via GitHub issues using bug templates.
@@ -149,17 +151,67 @@
 //!    File a bug report: https://github.com/username/repository/issues/new?title=Application%20Crash%3A%20NullPointerException&body=...
 //! ```
 
-use once_cell::sync::OnceCell;
-use std::collections::HashMap;
+mod url_encode;
 
+#[cfg(feature = "std")]
+extern crate std;
+
+#[cfg(not(feature = "std"))]
+extern crate alloc;
+
+#[cfg(not(feature = "std"))]
+use alloc::{
+    string::{String, ToString},
+    vec::Vec,
+    format,
+};
+
+use hashbrown::HashMap;
+use rustc_hash::FxHasher;
+use core::hash::BuildHasherDefault;
+
+type FxHashMap<K, V> = HashMap<K, V, BuildHasherDefault<FxHasher>>;
+
+#[cfg(feature = "std")]
+use once_cell::sync::OnceCell;
+
+#[cfg(feature = "std")]
 static CONFIG: OnceCell<BugReportConfig> = OnceCell::new();
+
+#[cfg(not(feature = "std"))]
+static mut CONFIG: Option<BugReportConfig> = None;
+
+/// Output trait for no_std compatibility
+pub trait Output {
+    fn write_str(&mut self, s: &str);
+    fn write_fmt(&mut self, args: core::fmt::Arguments);
+}
+
+#[cfg(feature = "std")]
+impl Output for std::io::Stderr {
+    fn write_str(&mut self, s: &str) {
+        eprint!("{}", s);
+    }
+    
+    fn write_fmt(&mut self, args: core::fmt::Arguments) {
+        eprint!("{}", args);
+    }
+}
+
+/// Default no-op output for no_std
+pub struct NoOutput;
+
+impl Output for NoOutput {
+    fn write_str(&mut self, _s: &str) {}
+    fn write_fmt(&mut self, _args: core::fmt::Arguments) {}
+}
 
 #[derive(Debug, Clone)]
 pub struct BugReportConfig {
     pub github_owner: String,
     pub github_repo: String,
-    pub templates: HashMap<String, IssueTemplate>,
-    pub template_files: HashMap<String, TemplateFile>,
+    pub templates: FxHashMap<String, IssueTemplate>,
+    pub template_files: FxHashMap<String, TemplateFile>,
     pub use_hyperlinks: HyperlinkMode,
 }
 
@@ -224,7 +276,7 @@ impl TemplateFile {
         })
     }
 
-    pub fn validate_params(&self, params: &HashMap<String, String>) -> Result<(), String> {
+    pub fn validate_params(&self, params: &FxHashMap<String, String>) -> Result<(), String> {
         let placeholders = extract_placeholders(self.content);
         
         for placeholder in &placeholders {
@@ -252,7 +304,7 @@ impl IssueTemplate {
         }
     }
 
-    pub fn from_template_file(template_file: &TemplateFile, params: &HashMap<String, String>) -> Result<Self, String> {
+    pub fn from_template_file(template_file: &TemplateFile, params: &FxHashMap<String, String>) -> Result<Self, String> {
         template_file.validate_params(params)?;
         let parsed_template = template_file.parse()?;
         Ok(parsed_template.fill_params(params))
@@ -263,7 +315,7 @@ impl IssueTemplate {
         self
     }
 
-    pub fn fill_params(&self, params: &HashMap<String, String>) -> IssueTemplate {
+    pub fn fill_params(&self, params: &FxHashMap<String, String>) -> IssueTemplate {
         let mut filled_title = self.title.clone();
         let mut filled_body = self.body.clone();
 
@@ -340,8 +392,8 @@ impl BugReportConfigBuilder {
             config: BugReportConfig {
                 github_owner,
                 github_repo,
-                templates: HashMap::new(),
-                template_files: HashMap::new(),
+                templates: FxHashMap::default(),
+                template_files: FxHashMap::default(),
                 use_hyperlinks: HyperlinkMode::Auto,
             },
         }
@@ -362,8 +414,20 @@ impl BugReportConfigBuilder {
         self
     }
 
+    #[cfg(feature = "std")]
     pub fn build(self) -> Result<(), &'static str> {
         CONFIG.set(self.config).map_err(|_| "Bug reporting already initialized")
+    }
+    
+    #[cfg(not(feature = "std"))]
+    pub unsafe fn build(self) -> Result<(), &'static str> {
+        unsafe {
+            match CONFIG {
+                Some(_) => return Err("Bug reporting already initialized"),
+                None => CONFIG = Some(self.config),
+            }
+        }
+        Ok(())
     }
 }
 
@@ -378,8 +442,8 @@ impl BugReportHandle {
             config: BugReportConfig {
                 github_owner,
                 github_repo,
-                templates: HashMap::new(),
-                template_files: HashMap::new(),
+                templates: FxHashMap::default(),
+                template_files: FxHashMap::default(),
                 use_hyperlinks: HyperlinkMode::Auto,
             },
         }
@@ -400,7 +464,7 @@ impl BugReportHandle {
         self
     }
 
-    pub fn generate_url(&self, template_name: &str, params: &HashMap<String, String>) -> Result<String, String> {
+    pub fn generate_url(&self, template_name: &str, params: &FxHashMap<String, String>) -> Result<String, String> {
         let filled_template = if let Some(template) = self.config.templates.get(template_name) {
             template.fill_params(params)
         } else if let Some(template_file) = self.config.template_files.get(template_name) {
@@ -417,16 +481,16 @@ impl BugReportHandle {
         let mut query_params = Vec::new();
         
         if !filled_template.title.is_empty() {
-            query_params.push(format!("title={}", urlencoding::encode(&filled_template.title)));
+            query_params.push(format!("title={}", url_encode::encode(&filled_template.title)));
         }
         
         if !filled_template.body.is_empty() {
-            query_params.push(format!("body={}", urlencoding::encode(&filled_template.body)));
+            query_params.push(format!("body={}", url_encode::encode(&filled_template.body)));
         }
         
         if !filled_template.labels.is_empty() {
             let labels_str = filled_template.labels.join(",");
-            query_params.push(format!("labels={}", urlencoding::encode(&labels_str)));
+            query_params.push(format!("labels={}", url_encode::encode(&labels_str)));
         }
 
         if !query_params.is_empty() {
@@ -437,15 +501,24 @@ impl BugReportHandle {
         Ok(url)
     }
 
-    pub fn report_bug(&self, template_name: &str, params: &HashMap<String, String>, file: &str, line: u32) -> String {
+    pub fn report_bug(&self, template_name: &str, params: &FxHashMap<String, String>, file: &str, line: u32) -> String {
+        self.report_bug_with_output(template_name, params, file, line, &mut NoOutput)
+    }
+    
+    #[cfg(feature = "std")]
+    pub fn report_bug_stderr(&self, template_name: &str, params: &FxHashMap<String, String>, file: &str, line: u32) -> String {
+        self.report_bug_with_output(template_name, params, file, line, &mut std::io::stderr())
+    }
+    
+    pub fn report_bug_with_output(&self, template_name: &str, params: &FxHashMap<String, String>, file: &str, line: u32, output: &mut dyn Output) -> String {
         match self.generate_url(template_name, params) {
             Ok(url) => {
-                eprintln!("🐛 BUG ENCOUNTERED in {}:{}", file, line);
-                eprintln!("   Template: {}", template_name);
+                output.write_fmt(format_args!("🐛 BUG ENCOUNTERED in {}:{}\n", file, line));
+                output.write_fmt(format_args!("   Template: {}\n", template_name));
                 if !params.is_empty() {
-                    eprintln!("   Parameters:");
+                    output.write_str("   Parameters:\n");
                     for (key, value) in params {
-                        eprintln!("     {}: {}", key, value);
+                        output.write_fmt(format_args!("     {}: {}\n", key, value));
                     }
                 }
                 let should_use_hyperlinks = match self.config.use_hyperlinks {
@@ -455,17 +528,17 @@ impl BugReportHandle {
                 };
                 
                 if should_use_hyperlinks {
-                    eprintln!("   {}", create_terminal_hyperlink(&url, "File a bug report"));
+                    output.write_fmt(format_args!("   {}\n", create_terminal_hyperlink(&url, "File a bug report")));
                 } else {
-                    eprintln!("   File a bug report: {}", url);
+                    output.write_fmt(format_args!("   File a bug report: {}\n", url));
                 }
-                eprintln!();
+                output.write_str("\n");
                 url
             }
             Err(e) => {
-                eprintln!("🐛 BUG ENCOUNTERED in {}:{}", file, line);
-                eprintln!("   Error generating bug report: {}", e);
-                eprintln!();
+                output.write_fmt(format_args!("🐛 BUG ENCOUNTERED in {}:{}\n", file, line));
+                output.write_fmt(format_args!("   Error generating bug report: {}\n", e));
+                output.write_str("\n");
                 String::new()
             }
         }
@@ -476,7 +549,8 @@ impl BugReportHandle {
     }
 }
 
-pub fn generate_github_url(template_name: &str, params: &HashMap<String, String>) -> Result<String, String> {
+#[cfg(feature = "std")]
+pub fn generate_github_url(template_name: &str, params: &FxHashMap<String, String>) -> Result<String, String> {
     let config = CONFIG.get().ok_or("Bug reporting not initialized. Call bug_rs::init() first.")?;
     
     let filled_template = if let Some(template) = config.templates.get(template_name) {
@@ -495,16 +569,16 @@ pub fn generate_github_url(template_name: &str, params: &HashMap<String, String>
     let mut query_params = Vec::new();
     
     if !filled_template.title.is_empty() {
-        query_params.push(format!("title={}", urlencoding::encode(&filled_template.title)));
+        query_params.push(format!("title={}", url_encode::encode(&filled_template.title)));
     }
     
     if !filled_template.body.is_empty() {
-        query_params.push(format!("body={}", urlencoding::encode(&filled_template.body)));
+        query_params.push(format!("body={}", url_encode::encode(&filled_template.body)));
     }
     
     if !filled_template.labels.is_empty() {
         let labels_str = filled_template.labels.join(",");
-        query_params.push(format!("labels={}", urlencoding::encode(&labels_str)));
+        query_params.push(format!("labels={}", url_encode::encode(&labels_str)));
     }
 
     if !query_params.is_empty() {
@@ -522,13 +596,27 @@ pub fn create_terminal_hyperlink(url: &str, text: &str) -> String {
 }
 
 /// Gets the hyperlink mode from configuration
+#[cfg(feature = "std")]
 pub fn get_hyperlink_mode() -> HyperlinkMode {
     CONFIG.get()
         .map(|config| config.use_hyperlinks.clone())
         .unwrap_or(HyperlinkMode::Never)
 }
 
+/// Gets the hyperlink mode from configuration (no_std version)
+#[cfg(not(feature = "std"))]
+pub unsafe fn get_hyperlink_mode() -> HyperlinkMode {
+    unsafe {
+        match core::ptr::addr_of!(CONFIG).read() {
+            Some(config) => config.use_hyperlinks.clone(),
+            None => HyperlinkMode::Never,
+        }
+    }
+}
+
 /// Detects if the terminal supports hyperlinks by checking environment variables
+/// Only available with std feature
+#[cfg(feature = "std")]
 pub fn supports_hyperlinks() -> bool {
     // Check for common terminal emulators that support hyperlinks
     if let Ok(term) = std::env::var("TERM") {
@@ -554,49 +642,64 @@ pub fn supports_hyperlinks() -> bool {
     false
 }
 
+/// No-std version always returns false - user must specify hyperlink mode explicitly
+#[cfg(not(feature = "std"))]
+pub fn supports_hyperlinks() -> bool {
+    false
+}
+
 #[macro_export]
 macro_rules! bug {
     ($template:expr) => {
         $crate::bug!($template, {})
     };
     ($template:expr, { $($key:ident = $value:expr),* $(,)? }) => {{
-        use std::collections::HashMap;
+        use $crate::FxHashMap;
         
-        let mut params = HashMap::new();
+        let mut params = FxHashMap::default();
         $(
             params.insert(stringify!($key).to_string(), $value.to_string());
         )*
 
-        match $crate::generate_github_url($template, &params) {
-            Ok(url) => {
-                eprintln!("🐛 BUG ENCOUNTERED in {}:{}", file!(), line!());
-                eprintln!("   Template: {}", $template);
-                if !params.is_empty() {
-                    eprintln!("   Parameters:");
-                    for (key, value) in &params {
-                        eprintln!("     {}: {}", key, value);
+        #[cfg(feature = "std")]
+        {
+            match $crate::generate_github_url($template, &params) {
+                Ok(url) => {
+                    eprintln!("🐛 BUG ENCOUNTERED in {}:{}", file!(), line!());
+                    eprintln!("   Template: {}", $template);
+                    if !params.is_empty() {
+                        eprintln!("   Parameters:");
+                        for (key, value) in &params {
+                            eprintln!("     {}: {}", key, value);
+                        }
                     }
+                    let should_use_hyperlinks = match $crate::get_hyperlink_mode() {
+                        $crate::HyperlinkMode::Auto => $crate::supports_hyperlinks(),
+                        $crate::HyperlinkMode::Always => true,
+                        $crate::HyperlinkMode::Never => false,
+                    };
+                    
+                    if should_use_hyperlinks {
+                        eprintln!("   {}", $crate::create_terminal_hyperlink(&url, "File a bug report"));
+                    } else {
+                        eprintln!("   File a bug report: {}", url);
+                    }
+                    eprintln!();
+                    url
                 }
-                let should_use_hyperlinks = match $crate::get_hyperlink_mode() {
-                    $crate::HyperlinkMode::Auto => $crate::supports_hyperlinks(),
-                    $crate::HyperlinkMode::Always => true,
-                    $crate::HyperlinkMode::Never => false,
-                };
-                
-                if should_use_hyperlinks {
-                    eprintln!("   {}", $crate::create_terminal_hyperlink(&url, "File a bug report"));
-                } else {
-                    eprintln!("   File a bug report: {}", url);
+                Err(e) => {
+                    eprintln!("🐛 BUG ENCOUNTERED in {}:{}", file!(), line!());
+                    eprintln!("   Error generating bug report: {}", e);
+                    eprintln!();
+                    String::new()
                 }
-                eprintln!();
-                url
             }
-            Err(e) => {
-                eprintln!("🐛 BUG ENCOUNTERED in {}:{}", file!(), line!());
-                eprintln!("   Error generating bug report: {}", e);
-                eprintln!();
-                String::new()
-            }
+        }
+        #[cfg(not(feature = "std"))]
+        {
+            // In no_std mode, we can't use the global config, so just return empty string
+            // User should use bug_with_handle! instead
+            String::new()
         }
     }};
 }
@@ -607,9 +710,9 @@ macro_rules! bug_with_handle {
         $crate::bug_with_handle!($handle, $template, {})
     };
     ($handle:expr, $template:expr, { $($key:ident = $value:expr),* $(,)? }) => {{
-        use std::collections::HashMap;
+        use $crate::FxHashMap;
         
-        let mut params = HashMap::new();
+        let mut params = FxHashMap::default();
         $(
             params.insert(stringify!($key).to_string(), $value.to_string());
         )*
